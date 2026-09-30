@@ -8581,11 +8581,18 @@ fn gpu_light(l: &PointLight, p: Vec3) -> GpuPointLight {
     } else {
         l.radius
     };
+    // (a vanilla headlight's spot: the vanilla shader takes its cone, marked by a negative
+    // radius here; the enhanced path never draws a vanilla light)
+    let extra = if spot && l.mode == LightMode::Vanilla {
+        [l.cone[0], 0.0, 0.0, -1.0]
+    } else {
+        [l.cone[0], l.core, l.beam, l.radius]
+    };
     GpuPointLight {
         pos: [p.x, p.y, p.z, vanilla_radius],
         color: [l.color[0], l.color[1], l.color[2], l.intensity],
         dir,
-        extra: [l.cone[0], l.core, l.beam, l.radius],
+        extra,
     }
 }
 
@@ -9818,6 +9825,17 @@ mod tests {
         // a headlight's beam gain rides along; a plain lamp has none
         assert_eq!(g.extra[2], 24.0);
         assert_eq!(gpu_light(&lamp, Vec3::ZERO).extra[2], 0.0);
+        // a vanilla headlight's spot: its radius for the vanilla shader, the cone's cosines
+        // and the mark that makes it a spot there
+        let vanilla_spot = PointLight {
+            mode: LightMode::Vanilla,
+            ..spot
+        };
+        assert!(drawn_by(&vanilla_spot, false) && !drawn_by(&vanilla_spot, true));
+        let g = gpu_light(&vanilla_spot, Vec3::ZERO);
+        assert_eq!(g.pos[3], 60.0);
+        assert_eq!(g.dir[3], 0.82);
+        assert_eq!(g.extra, [0.97, 0.0, 0.0, -1.0]);
     }
 
     #[test]

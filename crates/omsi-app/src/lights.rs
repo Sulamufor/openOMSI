@@ -15,6 +15,12 @@ use omsi_sim::{Daylight, VehicleInstance};
 /// OMSI's buses throw a clear pool.)
 const HEADLIGHT_INTENSITY: f32 = 45.0;
 
+/// A headlight's strength in the classic picture, as a map lamp's (`PointLight::intensity`).
+/// Measured against OMSI 2 from above, the stock NL202 at night in Spandau: its pool is
+/// some 18 of 255 over the unlit cobbles 1.5 - 2.5 m ahead, 12 at 4 - 5 m and nearly gone
+/// at 7 m; this gives 20, 12 and 5 there. (At 1 it was 60, 40 and 15.)
+const VANILLA_HEADLIGHT_INTENSITY: f32 = 0.2;
+
 /// Lighting parameters for the renderer from the daylight model.
 pub fn lighting_from(d: &Daylight, fog_range: f32) -> Lighting {
     // fog density from the weather's visibility range (an object at `range` is ~90% fogged)
@@ -146,27 +152,13 @@ pub fn vehicle_lights(
         if sel >= 0.0 {
             if let Some(sp) = ty.model.spotlights.get(sel as usize) {
                 let vals = sp.values;
-                let p = body.transform_point3(Vec3::new(vals[0], vals[1], vals[2]));
                 let d = body
                     .transform_vector3(Vec3::new(vals[3], vals[4], vals[5]))
                     .normalize_or_zero();
-                let range = vals[9].clamp(5.0, 45.0);
                 let color = [vals[6] / 255.0, vals[7] / 255.0, vals[8] / 255.0];
-                // vanilla: a spot approximated by point lights along its axis
-                for (k, f) in [(0.12, 1.0), (0.3, 0.8), (0.55, 0.5)] {
-                    lights.push(PointLight {
-                        position: v.position + (p + d * range * k).as_dvec3(),
-                        radius: range * 0.6,
-                        color,
-                        intensity: f * (0.3 + 0.7 * night),
-                        mode: LightMode::Vanilla,
-                        ..Default::default()
-                    });
-                }
-                // enhanced: the real spot, as D3D's [spotlight] describes it - inner and
-                // outer cone as full angles (values 10 and 11), the range (clamped to what
-                // the light grid carries), falling off with the square of the distance from
-                // a one-metre core
+                // the spot as D3D's [spotlight] describes it - inner and outer cone as full
+                // angles (values 10 and 11), the range (clamped to what the light grid
+                // carries)
                 let (inner, outer) = (
                     vals.get(10).copied().unwrap_or(30.0),
                     vals.get(11).copied().unwrap_or(70.0),
@@ -188,13 +180,30 @@ pub fn vehicle_lights(
                     }
                 }
                 let apex = body.transform_point3(apex);
+                let cone = [half(inner.min(outer)), half(outer)];
+                // vanilla: the same spot, lit as the classic picture lights a lamp (full
+                // within an eighth of its reach, then falling off). It stood in as three
+                // point lights along the axis, which shone all round: the first stood just
+                // ahead of the bus with a 27 m reach and lit its saloon, driver and body
+                // through the windscreen, and the road ahead as a broad bright pool.
+                lights.push(PointLight {
+                    position: v.position + apex.as_dvec3(),
+                    radius: vals[9].clamp(10.0, 45.0),
+                    color,
+                    intensity: VANILLA_HEADLIGHT_INTENSITY * (0.3 + 0.7 * night),
+                    direction: d,
+                    cone,
+                    mode: LightMode::Vanilla,
+                    ..Default::default()
+                });
+                // enhanced: falling off with the square of the distance from a one-metre core
                 lights.push(PointLight {
                     position: v.position + apex.as_dvec3(),
                     radius: vals[9].clamp(10.0, 60.0),
                     color,
                     intensity: HEADLIGHT_INTENSITY,
                     direction: d,
-                    cone: [half(inner.min(outer)), half(outer)],
+                    cone,
                     core: 1.0,
                     // (a plain spot, as Direct3D lights OMSI's road: the low-beam profile's
                     // bright band under a hard cut-off has nothing like it in the original)

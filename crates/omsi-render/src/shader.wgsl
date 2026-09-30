@@ -732,8 +732,17 @@ fn point_lights(p: vec3<f32>, n: vec3<f32>, map_k: f32) -> vec3<f32> {
             let r0 = l.pos.w * 0.125;
             let att = min(1.0, (r0 * r0) / max(dist * dist, 0.01)) * clamp(1.0 - dist / l.pos.w, 0.0, 1.0) * 3.75;
             let ndl = max(dot(n, d / max(dist, 0.01)), 0.15);
-            let k = select(map_k, 1.0, l.dir.x > 0.5 && l.dir.w < -1.5);
-            sum = sum + l.color.rgb * l.color.w * att * ndl * k;
+            // a vehicle's headlight (extra.w < 0: its spot, with the cone's cosines in
+            // dir.w and extra.x) lights a light-mapped road too, and only inside its cone:
+            // lit all round it lit its own saloon through the windscreen
+            let spot = l.extra.w < -0.5;
+            let k = select(map_k, 1.0, (l.dir.x > 0.5 && l.dir.w < -1.5) || spot);
+            var cone = 1.0;
+            if (spot) {
+                let c = dot(-d / max(dist, 0.01), l.dir.xyz);
+                cone = smoothstep(l.dir.w, max(l.extra.x, l.dir.w + 0.001), c);
+            }
+            sum = sum + l.color.rgb * l.color.w * att * ndl * k * cone;
         }
     }
     return sum;
