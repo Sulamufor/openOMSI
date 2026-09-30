@@ -1,0 +1,1 @@
+/home/leon/claude-code/openomsi/openOMSI-kickdown/crates/omsi-plugin/../openOMSI/target/debug/libomsi_demo_plugin.so: /home/leon/claude-code/openomsi/openOMSI-kickdown/crates/omsi-plugin/demo/src/lib.rs
