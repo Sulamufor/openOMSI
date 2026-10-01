@@ -1530,6 +1530,28 @@ struct StopInfo {
     seeded: bool,
     /// Seconds until the next person arrives on foot.
     next_arrival: f32,
+    /// How many people wait here at 100 % and the map's density 1: drawn between the stop's
+    /// two passenger counts when it is set up (`stop_passenger_counts`).
+    base: f32,
+}
+
+impl StopInfo {
+    /// How many people OMSI 2 keeps waiting here at `density` (the map's hourly passenger
+    /// density times the passengers setting): the stop's own count, no more than it has
+    /// waiting places.
+    fn target(&self, density: f32) -> usize {
+        ((self.base * density.max(0.0)).round() as usize).min(self.spots.len())
+    }
+}
+
+/// The people a stop is set up with at 100 %, drawn evenly between its two passenger counts
+/// (`u` 0..1). A stop whose first count is 0 keeps half the second.
+fn stop_base(counts: [f32; 2], u: f32) -> f32 {
+    let [a, b] = counts;
+    if a == 0.0 {
+        return b * 0.5;
+    }
+    b + (a - b) * u
 }
 
 /// Inside a bus, to where.
@@ -3073,6 +3095,7 @@ impl Humans {
         pos: DVec3,
         heading: f64,
         name: &str,
+        counts: [f32; 2],
     ) -> StopInfo {
         let all_stops: Vec<(i64, DVec3)> =
             world.bus_stops.lock().iter().map(|s| (s.0, s.1)).collect();
@@ -3188,6 +3211,12 @@ impl Humans {
             log::info!("stop {id} '{name}' at ({:.1}, {:.1}) heading {heading:.0}: {} waiting places ({from_map} from the map), pavement {:?}", pos.x, pos.y, spots.len(), lane);
         }
         let next_arrival = 5.0 + (self.rand_f() * 30.0) as f32;
+        let base = stop_base(counts, self.rand_f() as f32);
+        if debug_pax() {
+            log::info!(
+                "stop {id} '{name}': passenger counts {counts:?}, {base:.1} people at 100 %"
+            );
+        }
         StopInfo {
             name: name.to_string(),
             pos,
@@ -3195,6 +3224,7 @@ impl Humans {
             lane,
             seeded: false,
             next_arrival,
+            base,
         }
     }
 
@@ -3235,22 +3265,22 @@ impl Humans {
         center: DVec3,
     ) {
         self.center = center;
-        let list: Vec<(i64, DVec3, f64, String)> = world
+        let list: Vec<(i64, DVec3, f64, String, [f32; 2])> = world
             .bus_stops
             .lock()
             .iter()
             .filter(|s| (s.1 - center).length() < 600.0)
-            .map(|s| (s.0, s.1, s.2, s.3.clone()))
+            .map(|s| (s.0, s.1, s.2, s.3.clone(), s.4))
             .collect();
         let initial = !self.started;
         self.started = true;
-        for (id, pos, rot, name) in list {
+        for (id, pos, rot, name, counts) in list {
             // only once the ground under the stop is there
             if world.walk_height(pos.x, pos.y).is_none() {
                 continue;
             }
             if !self.stops.contains_key(&id) {
-                let mut info = self.build_stop(world, net, id, pos, rot, &name);
+                let mut info = self.build_stop(world, net, id, pos, rot, &name, counts);
                 if let Some(k) = self.rebuild.iter().position(|r| r.0 == id) {
                     let (_, seeded, next) = self.rebuild.swap_remove(k);
                     info.seeded = seeded;
@@ -3270,9 +3300,10 @@ impl Humans {
                 continue;
             }
             self.stops.get_mut(&id).unwrap().seeded = true;
+            // as many as the stop's own passenger counts call for at this density (OMSI 2
+            // fills a stop up to that, its waiting places permitting)
             let n_spots = self.stops[&id].spots.len();
-            let mut want = ((1 + (self.rand() % 5) as usize) as f32 * self.density.clamp(0.0, 3.0))
-                .round() as usize;
+            let mut want = self.stops[&id].target(self.density.clamp(0.0, 3.0));
             // OMSI_PAX_WAITING=n: exactly n people at every stop, all taking the next bus (a crowd test)
             let forced = omsi_cfg::env::var("OMSI_PAX_WAITING")
                 .ok()
@@ -3280,7 +3311,7 @@ impl Humans {
             if let Some(n) = forced {
                 want = n;
             }
-            for _ in 0..want.min(n_spots.saturating_sub(1)) {
+            for _ in 0..want.min(n_spots) {
                 let free: Vec<usize> = self.stops[&id]
                     .spots
                     .iter()
@@ -3496,11 +3527,13 @@ impl Humans {
             if st.next_arrival > 0.0 {
                 continue;
             }
-            let dens = self.density.clamp(0.05, 3.0);
-            st.next_arrival = (25.0 + 50.0 * (1.0 / dens)) * 0.5;
+            // one more every 10-15 s while the stop has fewer than its passenger counts call
+            // for, as OMSI 2 fills them (a fixed seven at the most kept the busiest stops
+            // half empty at any passengers setting, #458)
+            let target = self.stops[&id].target(self.density.clamp(0.0, 3.0));
             let st_rand = self.rand_f() as f32;
-            self.stops.get_mut(&id).unwrap().next_arrival *= 0.6 + st_rand;
-            if free_spots <= 1 || waiting >= 7 {
+            self.stops.get_mut(&id).unwrap().next_arrival = 10.0 + 5.0 * st_rand;
+            if free_spots == 0 || waiting >= target {
                 continue;
             }
             // somewhere 40-90 m away along the pavement, out of sight
@@ -9021,6 +9054,35 @@ impl Humans {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stop_waits_for_as_many_as_its_counts_call_for() {
+        // evenly between the two counts; a first count of 0 keeps half the second
+        assert_eq!(stop_base([10.0, 5.0], 0.0), 5.0);
+        assert_eq!(stop_base([10.0, 5.0], 1.0), 10.0);
+        assert_eq!(stop_base([0.0, 0.0], 0.5), 0.0);
+        assert_eq!(stop_base([0.0, 6.0], 0.9), 3.0);
+        let spot = Spot {
+            pos: DVec3::ZERO,
+            face: 0.0,
+            seat: 0.0,
+            taken: None,
+        };
+        let stop = |base: f32, places: usize| StopInfo {
+            name: String::new(),
+            pos: DVec3::ZERO,
+            spots: vec![spot.clone(); places],
+            lane: None,
+            seeded: false,
+            next_arrival: 0.0,
+            base,
+        };
+        // the passengers setting and the hour scale it, the waiting places cap it
+        assert_eq!(stop(7.5, 21).target(1.2), 9);
+        assert_eq!(stop(7.5, 21).target(2.4), 18);
+        assert_eq!(stop(20.0, 21).target(2.4), 21);
+        assert_eq!(stop(-1.0, 21).target(2.0), 0);
+    }
 
     /// Berlin 1991's pack: full fare, short haul, day ticket (adults), and two reduced
     /// fares for 6..13.

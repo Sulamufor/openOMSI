@@ -509,6 +509,11 @@ the bottom.
   subfolders next to the normal textures (same file names) and take precedence.
   `[trafficdensity_road]` / `[trafficdensity_passenger] hour factor` lines form a curve
   over the day that scales AI traffic and waiting passengers.
+* A placed `[busstop]` object's strings are its name and then two passenger counts (`10`,
+  `5` at a busy stop; missing: 1 and 0, rounded to whole numbers). The stop keeps a number
+  of people waiting drawn between the two, times `[trafficdensity_passenger]` at the hour
+  and the passengers setting, and never more than it has waiting places; it is filled up
+  again every 10-15 s. A stop with `0` `0` has nobody waiting.
 * Scenery `.sco` `[sound] sound\x.cfg` uses the vehicle sound.cfg format, driven by the
   object's script variables and triggers (ambient sound objects are `[onlyeditor]`).
 

@@ -152,9 +152,11 @@ pub(crate) fn run_offscreen(
                 h.money = Some(money::Money::new(&args.root, &world.global.money_system));
             }
         }
+        // (with the passengers setting, as in the window)
         h.density = world
             .global
-            .passenger_density((parse_time(&args.time) / 3600.0) as f32);
+            .passenger_density((parse_time(&args.time) / 3600.0) as f32)
+            * settings.pax_density;
         h.time_of_day = parse_time(&args.time);
         h.stop_targets = schedule.as_ref().map(|s| s.stop_targets());
         h.populate(&world, &renderer, &mut scene, center);
@@ -1701,7 +1703,7 @@ pub(crate) fn run_offscreen(
                 p.vehicle.physics.velocity_kmh()
             );
             if omsi_cfg::env::var_os("OMSI_DEBUG_HUMANS").is_some() {
-                for (id, pos, rot, name) in world.bus_stops.lock().iter() {
+                for (id, pos, rot, name, _) in world.bus_stops.lock().iter() {
                     log::info!(
                         "  bus stop {id} '{name}' at ({:.1}, {:.1}) heading {rot:.0}",
                         pos.x,
@@ -1709,7 +1711,7 @@ pub(crate) fn run_offscreen(
                     );
                 }
             }
-            if let Some((id, pos, _, name)) = world.bus_stops.lock().iter().min_by(|a, b| (a.1 - p.vehicle.position).length().total_cmp(&(b.1 - p.vehicle.position).length())) {
+            if let Some((id, pos, _, name, _)) = world.bus_stops.lock().iter().min_by(|a, b| (a.1 - p.vehicle.position).length().total_cmp(&(b.1 - p.vehicle.position).length())) {
                 log::info!(
                     "nearest bus stop {id} '{name}' at ({:.1}, {:.1}) is {:.1} m away",
                     pos.x,

@@ -785,7 +785,7 @@ impl PendingUpload {
 /// What a loaded tile added to the world, so that unloading it can take it away again.
 #[derive(Default)]
 pub struct TileState {
-    pub bus_stops: Vec<(i64, DVec3, f64, String)>,
+    pub bus_stops: Vec<(i64, DVec3, f64, String, [f32; 2])>,
     /// The tile's waiting places (see `World::waiting_places`).
     pub waiting_places: Vec<(i64, DVec3, f64, f32)>,
     pub obstacles: Vec<omsi_sim::collision::Obb>,
@@ -1831,8 +1831,9 @@ pub struct World {
     pub object_edits: Mutex<HashMap<i64, ObjectEdit>>,
     /// The ground as the editor's brush has left it, by tile (read instead of the file).
     pub terrain_edits: Mutex<HashMap<(i32, i32), Terrain>>,
-    /// Placed `[busstop]` objects: (map id, world position, heading, name).
-    pub bus_stops: Mutex<Vec<(i64, DVec3, f64, String)>>,
+    /// Placed `[busstop]` objects: (map id, world position, heading, name, the two
+    /// passenger counts that follow the name - see `stop_passenger_counts`).
+    pub bus_stops: Mutex<Vec<(i64, DVec3, f64, String, [f32; 2])>>,
     /// Where people wait at the stops: the `[passpos]` points of placed objects with a
     /// `[passengercabin]` (the maps' `people_standing_*` markers and bus shelters) as
     /// (object id, world position, heading in degrees, seat height - 0 for a standing place).
@@ -4407,6 +4408,7 @@ impl World {
                     pos,
                     heading,
                     o.extra.first().cloned().unwrap_or_default(),
+                    stop_passenger_counts(&o.extra),
                 ));
             }
             if let Some(rel) = &ot.sco.passenger_cabin {
@@ -9465,6 +9467,22 @@ fn d3d_material(
 
 /// The material manager's depth and reflection settings of a slot's `[matl]` commands
 /// (`bump`: the loaded `[matl_bumpmap]` height map and its factor).
+/// The two passenger counts a bus stop carries after its name (the editor's strings 1 and
+/// 2, `10` and `5` at a busy stop): how many people wait there, somewhere between the two,
+/// at the map's passenger density and 100 %. Whole numbers, as OMSI 2 rounds them; without
+/// them 1 and 0, and a count that is no number keeps its default.
+fn stop_passenger_counts(extra: &[String]) -> [f32; 2] {
+    let count = |i: usize, default: f32| {
+        extra
+            .get(i)
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| v.round() as f32)
+            .unwrap_or(default)
+    };
+    [count(1, 1.0), count(2, 0.0)]
+}
+
 fn material_extra(
     ov: &[&MaterialDef],
     env_mask: Option<TextureId>,
@@ -12487,6 +12505,19 @@ mod material_tests {
             true,
             true
         ));
+    }
+
+    #[test]
+    fn stop_passenger_counts_follow_the_name() {
+        let x = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            stop_passenger_counts(&x(&["U Rathaus Spandau", "10", "5", "50"])),
+            [10.0, 5.0]
+        );
+        // rounded; missing ones are 1 and 0; one that is no number keeps its default
+        assert_eq!(stop_passenger_counts(&x(&["Stop", "7.6"])), [8.0, 0.0]);
+        assert_eq!(stop_passenger_counts(&x(&["Stop"])), [1.0, 0.0]);
+        assert_eq!(stop_passenger_counts(&x(&["Stop", "", "x"])), [1.0, 0.0]);
     }
 
     #[test]
